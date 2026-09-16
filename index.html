@@ -152,23 +152,49 @@ const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/
     }
 
     // --- Text to Speech ---
-    function speakResponse(text) {
-      if (!('speechSynthesis' in window)) {
-        state = 'idle';
-        return;
-      }
+// Add explicitly defined language and voice engine initialization
+function speakResponse(text) {
+  if (!('speechSynthesis' in window)) {
+    state = 'idle';
+    return;
+  }
 
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.onstart = () => { state = 'speaking'; };
-      utterance.onend = () => { 
-        state = 'idle'; 
-        statusDiv.innerText = "Tap eyes to speak";
-      };
-      utterance.onerror = () => { state = 'idle'; };
+  // Mandatory for Android WebView: clear pending audio queues
+  window.speechSynthesis.cancel();
 
-      window.speechSynthesis.speak(utterance);
-    }
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = 'en-US';
+  utterance.rate = 1.0;
+  utterance.pitch = 1.0;
+
+  // Wait for Android native voices to populate
+  const voices = window.speechSynthesis.getVoices();
+  if (voices.length > 0) {
+    // Prefer Google US English voice if available on Android
+    const preferredVoice = voices.find(v => v.lang.includes('en') && v.name.includes('Google'));
+    if (preferredVoice) utterance.voice = preferredVoice;
+  }
+
+  utterance.onstart = () => { 
+    state = 'speaking'; 
+  };
+  
+  utterance.onend = () => { 
+    state = 'idle'; 
+    statusDiv.innerText = "Tap eyes to speak";
+  };
+  
+  utterance.onerror = (e) => { 
+    console.error("SpeechSynthesis Error:", e);
+    state = 'idle'; 
+    statusDiv.innerText = "Tap eyes to speak";
+  };
+
+  // Small timeout fix for Android Chrome TTS bug
+  setTimeout(() => {
+    window.speechSynthesis.speak(utterance);
+  }, 50);
+}
 
     // Touch event listener
     window.addEventListener('click', () => {
