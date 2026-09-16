@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#000000" />
+  <title>EMO Cover Screen AI</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body, html {
+      width: 100vw;
+      height: 100vh;
+      background-color: #000000;
+      overflow: hidden;
+      touch-action: none;
+      user-select: none;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="eyeCanvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById('eyeCanvas');
+    const ctx = canvas.getContext('2d');
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Replace with your real Gemini API key
+    const GEMINI_API_KEY = "AQ.Ab8RN6KrDUNQ3CE9s-T9hCktLrh_ZDYcIrFGdIk6omFbkW2Akw";
+    const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+    // App States: 'idle', 'listening', 'thinking', 'speaking'
+    let state = 'idle';
+
+    // Tailored eye sizes for Z Flip 4 (512x260 resolution)
+    const eyeConfig = {
+      color: '#00f3ff',
+      size: 55,
+      spacing: 110,
+      eyeYOffset: 0,
+      scaleY: 1.0,
+      scaleX: 1.0,
+      rotation: 0
+    };
+
+    let blinkTimer = 0;
+    let isBlinking = false;
+    let pulseAngle = 0;
+
+    // --- Web Speech API (Input) ---
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognition;
+
+    if (SpeechRecognition) {
+      recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => { state = 'listening'; };
+      recognition.onresult = async (event) => {
+        const transcript = event.results[0][0].transcript;
+        state = 'thinking';
+        await askGemini(transcript);
+      };
+      recognition.onerror = () => { state = 'idle'; };
+      recognition.onend = () => {
+        if (state === 'listening') state = 'idle';
+      };
+    }
+
+    // --- Gemini API ---
+    async function askGemini(promptText) {
+      try {
+        const response = await fetch(GEMINI_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: promptText }] }],
+            systemInstruction: {
+              parts: [{ text: "You are EMO, a friendly robot living on a phone's cover screen. Keep responses under 2 concise sentences." }]
+            }
+          })
+        });
+
+        const data = await response.json();
+        const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || "I couldn't hear you clearly.";
+        speakResponse(replyText);
+      } catch (err) {
+        console.error("API Error:", err);
+        speakResponse("Network error.");
+      }
+    }
+
+    // --- Text-to-Speech (Output) ---
+    function speakResponse(text) {
+      if (!('speechSynthesis' in window)) {
+        state = 'idle';
+        return;
+      }
+
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.onstart = () => { state = 'speaking'; };
+      utterance.onend = () => { state = 'idle'; };
+      utterance.onerror = () => { state = 'idle'; };
+
+      window.speechSynthesis.speak(utterance);
+    }
+
+    // Cover Screen Touch Listener
+    window.addEventListener('click', () => {
+      if (state === 'speaking') {
+        window.speechSynthesis.cancel();
+        state = 'idle';
+        return;
+      }
+
+      if (recognition && state === 'idle') {
+        try {
+          recognition.start();
+        } catch (e) {
+          console.warn("Recognition already active.");
+        }
+      }
+    });
+
+    // --- Canvas Render Loop ---
+    function update() {
+      pulseAngle += 0.05;
+
+      eyeConfig.scaleX = 1.0;
+      eyeConfig.scaleY = 1.0;
+      eyeConfig.rotation = 0;
+      eyeConfig.eyeYOffset = 0;
+
+      // Natural Blinking
+      blinkTimer++;
+      if (blinkTimer > 180 && !isBlinking) {
+        if (Math.random() < 0.05) isBlinking = true;
+      }
+
+      if (isBlinking) {
+        eyeConfig.scaleY = 0.05;
+        if (blinkTimer % 5 === 0) {
+          isBlinking = false;
+          blinkTimer = 0;
+        }
+      }
+
+      // Visual States
+      if (state === 'idle') {
+        eyeConfig.color = '#00f3ff';
+        eyeConfig.scaleY *= 1 + Math.sin(pulseAngle) * 0.03;
+      } 
+      else if (state === 'listening') {
+        eyeConfig.color = '#00ff66';
+        eyeConfig.scaleX = 1.25;
+        eyeConfig.scaleY = 1.25;
+      } 
+      else if (state === 'thinking') {
+        eyeConfig.color = '#ffaa00';
+        eyeConfig.rotation = Math.sin(pulseAngle * 2) * 0.15;
+        eyeConfig.scaleX = 0.85;
+        eyeConfig.scaleY = 0.85;
+      } 
+      else if (state === 'speaking') {
+        eyeConfig.color = '#00f3ff';
+        eyeConfig.scaleY = 1 + Math.abs(Math.sin(pulseAngle * 4)) * 0.45;
+        eyeConfig.scaleX = 1 - Math.abs(Math.sin(pulseAngle * 4)) * 0.12;
+      }
+    }
+
+    function drawEye(cx, cy, side) {
+      ctx.save();
+      ctx.translate(cx, cy + eyeConfig.eyeYOffset);
+      ctx.rotate(side * eyeConfig.rotation);
+      ctx.scale(eyeConfig.scaleX, eyeConfig.scaleY);
+
+      ctx.shadowColor = eyeConfig.color;
+      ctx.shadowBlur = 20;
+
+      ctx.fillStyle = eyeConfig.color;
+      const size = eyeConfig.size;
+      const radius = 18;
+
+      ctx.beginPath();
+      ctx.roundRect(-size / 2, -size / 2, size, size, radius);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+      const spacing = eyeConfig.spacing / 2;
+
+      drawEye(centerX - spacing, centerY, -1);
+      drawEye(centerX + spacing, centerY, 1);
+    }
+
+    function loop() {
+      update();
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    loop();
+  </script>
+</body>
+</html>
