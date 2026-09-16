@@ -3,9 +3,6 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="theme-color" content="#000000" />
   <title>EMO Cover Screen AI</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -17,8 +14,19 @@
       touch-action: none;
       user-select: none;
       display: flex;
+      flex-direction: column;
       justify-content: center;
       align-items: center;
+    }
+    #status {
+      position: absolute;
+      top: 10px;
+      color: #00f3ff;
+      font-family: monospace;
+      font-size: 11px;
+      text-align: center;
+      z-index: 10;
+      pointer-events: none;
     }
     canvas {
       width: 100%;
@@ -29,11 +37,13 @@
 </head>
 <body>
 
+  <div id="status">Tap eyes to speak</div>
   <canvas id="eyeCanvas"></canvas>
 
   <script>
     const canvas = document.getElementById('eyeCanvas');
     const ctx = canvas.getContext('2d');
+    const statusDiv = document.getElementById('status');
 
     function resize() {
       canvas.width = window.innerWidth;
@@ -46,10 +56,9 @@
     const GEMINI_API_KEY = "AQ.Ab8RN6KrDUNQ3CE9s-T9hCktLrh_ZDYcIrFGdIk6omFbkW2Akw";
     const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
-    // App States: 'idle', 'listening', 'thinking', 'speaking'
     let state = 'idle';
+    let capturedTranscript = "";
 
-    // Tailored eye sizes for Z Flip 4 (512x260 resolution)
     const eyeConfig = {
       color: '#00f3ff',
       size: 55,
@@ -64,29 +73,52 @@
     let isBlinking = false;
     let pulseAngle = 0;
 
-    // --- Web Speech API (Input) ---
+    // --- Speech Recognition setup ---
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition;
 
     if (SpeechRecognition) {
       recognition = new SpeechRecognition();
       recognition.continuous = false;
-      recognition.interimResults = false;
+      recognition.interimResults = true; // Capture live speech chunks
       recognition.lang = 'en-US';
 
-      recognition.onstart = () => { state = 'listening'; };
-      recognition.onresult = async (event) => {
-        const transcript = event.results[0][0].transcript;
-        state = 'thinking';
-        await askGemini(transcript);
+      recognition.onstart = () => {
+        state = 'listening';
+        capturedTranscript = "";
+        statusDiv.innerText = "Listening...";
       };
-      recognition.onerror = () => { state = 'idle'; };
-      recognition.onend = () => {
-        if (state === 'listening') state = 'idle';
+
+      recognition.onresult = (event) => {
+        let transcript = "";
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          transcript += event.results[i][0].transcript;
+        }
+        capturedTranscript = transcript;
+        statusDiv.innerText = `Hear: "${transcript}"`;
       };
+
+      recognition.onerror = (event) => {
+        console.error("Speech Rec Error:", event.error);
+        statusDiv.innerText = `Mic Error: ${event.error}`;
+        state = 'idle';
+      };
+
+      recognition.onend = async () => {
+        if (capturedTranscript.trim().length > 0) {
+          state = 'thinking';
+          statusDiv.innerText = "Thinking...";
+          await askGemini(capturedTranscript);
+        } else {
+          state = 'idle';
+          statusDiv.innerText = "No speech detected. Tap to retry.";
+        }
+      };
+    } else {
+      statusDiv.innerText = "Speech API not supported in this WebView.";
     }
 
-    // --- Gemini API ---
+    // --- Gemini Call ---
     async function askGemini(promptText) {
       try {
         const response = await fetch(GEMINI_API_URL, {
@@ -95,21 +127,30 @@
           body: JSON.stringify({
             contents: [{ parts: [{ text: promptText }] }],
             systemInstruction: {
-              parts: [{ text: "You are EMO, a friendly robot living on a phone's cover screen. Keep responses under 2 concise sentences." }]
+              parts: [{ text: "You are EMO, a friendly robot living on a phone's cover screen. Keep responses under 2 short sentences." }]
             }
           })
         });
 
         const data = await response.json();
-        const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || "I couldn't hear you clearly.";
+        
+        if (data.error) {
+          statusDiv.innerText = `API Key Error: ${data.error.message}`;
+          speakResponse("API key error.");
+          return;
+        }
+
+        const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || "I didn't catch that.";
+        statusDiv.innerText = replyText;
         speakResponse(replyText);
       } catch (err) {
         console.error("API Error:", err);
+        statusDiv.innerText = "Network Error";
         speakResponse("Network error.");
       }
     }
 
-    // --- Text-to-Speech (Output) ---
+    // --- Text to Speech ---
     function speakResponse(text) {
       if (!('speechSynthesis' in window)) {
         state = 'idle';
@@ -119,17 +160,21 @@
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.onstart = () => { state = 'speaking'; };
-      utterance.onend = () => { state = 'idle'; };
+      utterance.onend = () => { 
+        state = 'idle'; 
+        statusDiv.innerText = "Tap eyes to speak";
+      };
       utterance.onerror = () => { state = 'idle'; };
 
       window.speechSynthesis.speak(utterance);
     }
 
-    // Cover Screen Touch Listener
+    // Touch event listener
     window.addEventListener('click', () => {
       if (state === 'speaking') {
         window.speechSynthesis.cancel();
         state = 'idle';
+        statusDiv.innerText = "Tap eyes to speak";
         return;
       }
 
@@ -137,12 +182,12 @@
         try {
           recognition.start();
         } catch (e) {
-          console.warn("Recognition already active.");
+          statusDiv.innerText = "Mic busy, try tapping again.";
         }
       }
     });
 
-    // --- Canvas Render Loop ---
+    // --- Render Loop ---
     function update() {
       pulseAngle += 0.05;
 
@@ -151,7 +196,6 @@
       eyeConfig.rotation = 0;
       eyeConfig.eyeYOffset = 0;
 
-      // Natural Blinking
       blinkTimer++;
       if (blinkTimer > 180 && !isBlinking) {
         if (Math.random() < 0.05) isBlinking = true;
@@ -165,7 +209,6 @@
         }
       }
 
-      // Visual States
       if (state === 'idle') {
         eyeConfig.color = '#00f3ff';
         eyeConfig.scaleY *= 1 + Math.sin(pulseAngle) * 0.03;
